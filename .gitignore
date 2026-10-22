@@ -1,0 +1,36 @@
+# ---------------- 密钥：绝对不能提交 ----------------
+key.txt
+*.key
+.env
+.env.*
+
+# ---------------- Office 临时锁文件 ----------------
+~$*
+
+# ---------------- 原始采集数据：体积大，且可用脚本重新生成 ----------------
+data/raw/
+data/raw_v1_centerpoint/
+data/scenic/raw/
+data/hotel/raw/
+data/*.csv
+data/scenic/poi_all.csv
+data/hotel/poi_all.csv
+
+# 保留需要人工核对 / 手工产出的产物
+!data/sample_150.csv
+!data/route-plan.xlsx
+!data/*.md
+
+# ---------------- Python ----------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# ---------------- IDE / 系统 ----------------
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
