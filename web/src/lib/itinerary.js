@@ -20,10 +20,25 @@
 /* ---------------- 常量 ---------------- */
 
 export const MEAL_SLOTS = [
-  { key: 'breakfast', label: '早餐', from: 7 * 60, to: 10 * 60, exclude: ['火锅烧烤', '饮品'] },
+  {
+    key: 'breakfast',
+    label: '早餐',
+    from: 7 * 60,
+    to: 10 * 60,
+    exclude: ['火锅烧烤', '饮品'],
+    // 早餐偏好：粉面、粥饭、小吃。不设这条会排出「酱板鸭当早餐」
+    prefer: ['粉面', '米饭快餐', '小吃卤味'],
+  },
   { key: 'lunch', label: '午餐', from: 11 * 60, to: 14 * 60, exclude: ['饮品'] },
   { key: 'dinner', label: '晚餐', from: 17 * 60, to: 20 * 60, exclude: ['饮品'] },
 ]
+
+/** 名字里带这些的是内部餐饮，不是给游客的 */
+const UNWANTED_NAME = /员工餐厅|职工餐厅|员工食堂|内部|食堂/
+
+function isUnwanted(shop) {
+  return UNWANTED_NAME.test(shop?.name || '')
+}
 
 /** 相邻两餐最大直线距离：超过就不算"可执行的一天"了 */
 const MAX_LEG_M = 2200
@@ -167,6 +182,7 @@ function buildDay(pool, perMeal, usedIds) {
     for (const attempt of attempts) {
       const byBudget = base.filter(attempt.test)
       const byGroup = byBudget.filter((s) => {
+        if (isUnwanted(s)) return false
         const g = dishGroup(s)
         if (g === null) return true
         if (usedGroups.has(g)) return false
@@ -255,7 +271,8 @@ function buildDay(pool, perMeal, usedIds) {
 
 /* ---------------- 对外：生成整份行程 ---------------- */
 
-export function buildItinerary({ days, dailyBudget, districtSlugs }, shops) {
+/** 片区模式：按片区轮转选三餐（没有锚点时用这个） */
+function buildDistrictItinerary({ days, dailyBudget, districtSlugs }, shops) {
   const nDays = Math.max(1, Math.floor(days || 1))
   const budget = Number(dailyBudget) || 50
   const perMeal = budget / 3
@@ -321,9 +338,9 @@ export function buildItinerary({ days, dailyBudget, districtSlugs }, shops) {
 }
 
 /** 同一批参数跑三档预算，用于并排对比 */
-export function compareTiers({ days, districtSlugs }, shops, tiers = BUDGET_TIERS.map((t) => t.value)) {
+export function compareTiers({ days, districtSlugs, anchors }, shops, tiers = BUDGET_TIERS.map((t) => t.value)) {
   return tiers.map((dailyBudget) => {
-    const r = buildItinerary({ days, dailyBudget, districtSlugs }, shops)
+    const r = buildItinerary({ days, dailyBudget, districtSlugs, anchors }, shops)
     return {
       tier:
         BUDGET_TIERS.find((t) => t.value === dailyBudget) ?? {
@@ -334,8 +351,288 @@ export function compareTiers({ days, districtSlugs }, shops, tiers = BUDGET_TIER
       shops: r.plan.map((p) => ({
         dayIndex: p.dayIndex,
         district: p.district,
-        names: p.meals.map((m) => m.shop.name),
+        names: p.meals.map((m) => m.shop?.name ?? m.anchor?.name ?? '—'),
+      })),
+      anchors: r.plan.map((p) => ({
+        dayIndex: p.dayIndex,
+        names: (p.anchors ?? []).map((a) => a.anchor.name),
       })),
     }
   })
+}
+
+/* =================================================================
+   锚点模式（anchor-first）
+   -----------------------------------------------------------------
+   真实旅游是「先去哪玩，再就近吃」，不是「先定吃哪家，再跑过去」。
+   所以这里换成：先定当天 1–2 个景点锚点（+ 可选的夜间锚点），
+   三餐就在锚点周边找，找不够再逐级放宽半径。
+
+   吃+逛复合体（文和友、火宫殿）特殊处理：它本身就是一顿饭，
+   占掉对应餐次，不再额外配餐，否则会出现「逛文和友 + 在文和友吃」的重复。
+   ================================================================= */
+
+const ANCHOR_MEAL_RADIUS = [800, 1500, 3000]
+/** 同一天两个锚点最远 9km：跨江（岳麓山 ↔ 五一广场 约 6km）还算合理 */
+const MAX_ANCHOR_LEG_M = 9000
+
+function usableAnchors(anchors) {
+  return (anchors ?? []).filter((a) => a.foodAvailable && a.lng != null && a.lat != null)
+}
+
+function pickAnchor(candidates, used, filter) {
+  const pool = candidates.filter((a) => !used.has(a.id)).filter(filter)
+  if (!pool.length) return null
+  return [...pool].sort((a, b) => {
+    if (a.mustSee !== b.mustSee) return a.mustSee ? -1 : 1
+    // 离市中心近的先排，减少跨城
+    const da = Math.abs((a.lng ?? 0) - 112.982) + Math.abs((a.lat ?? 0) - 28.1945)
+    const db = Math.abs((b.lng ?? 0) - 112.982) + Math.abs((b.lat ?? 0) - 28.1945)
+    if (da !== db) return da - db
+    return String(a.id).localeCompare(String(b.id))
+  })[0]
+}
+
+/** 在锚点周边找一家店：半径逐级放宽，价格档由宽到窄 */
+function pickMealNear(pool, center, perMeal, slot, usedIds, usedGroups) {
+  const floor = perMeal * PRICE_FLOOR_RATIO
+  const attempts = [
+    {
+      level: 'strict',
+      test: (s) => (s.cost ?? Infinity) <= perMeal && (s.cost ?? Infinity) >= floor,
+    },
+    { level: 'no-floor', test: (s) => (s.cost ?? Infinity) <= perMeal },
+    { level: 'any', test: () => true },
+  ]
+
+  for (const radius of ANCHOR_MEAL_RADIUS) {
+    const near = pool.filter((s) => !usedIds.has(s.id) && distanceMeters(center, s) <= radius)
+    if (!near.length) continue
+
+    for (const attempt of attempts) {
+      const byBudget = near.filter(attempt.test)
+      const byGroup = byBudget.filter((s) => {
+        if (isUnwanted(s)) return false
+        const g = dishGroup(s)
+        if (g === null) return true
+        if (usedGroups.has(g)) return false
+        return !(slot.exclude || []).includes(g)
+      })
+      // 时段偏好（如早餐偏粉面）先筛一遍，筛空了再退回
+      if (slot.prefer) {
+        const pref = byGroup.filter((s) => slot.prefer.includes(dishGroup(s)))
+        if (!pref.length && !byGroup.length) continue
+        if (pref.length) byGroup.splice(0, byGroup.length, ...pref)
+      }
+      const byHours = byGroup.filter((s) => {
+        const r = openInSlot(parseOpeningHours(s.opentimeWeek), slot)
+        return r === true || r === 'unknown'
+      })
+      const finalPool = byHours.length ? byHours : byGroup
+      if (!finalPool.length) continue
+
+      // 与片区模式的关键差别：这里**离锚点越近越优先**，
+      // 因为「顺路」才是锚点模式要保证的，而不是「离核心区远 = 本地店」
+      const sorted = [...finalPool].sort((a, b) => {
+        const ca = a.cost ?? -1
+        const cb = b.cost ?? -1
+        if (cb !== ca) return cb - ca
+        const da = distanceMeters(center, a)
+        const db = distanceMeters(center, b)
+        if (da !== db) return da - db
+        return String(a.id).localeCompare(String(b.id))
+      })
+      return { shop: sorted[0], level: attempt.level, radius }
+    }
+  }
+  return null
+}
+
+function buildAnchorDay(dayIndex, anchors, shops, perMeal, usedAnchorIds, usedShopIds) {
+  const notes = []
+  const usedGroups = new Set()
+  const candidates = usableAnchors(anchors)
+
+  const morning = pickAnchor(candidates, usedAnchorIds, (a) => a.dayPart !== 'night')
+  if (morning) usedAnchorIds.add(morning.id)
+
+  const afternoon = morning
+    ? pickAnchor(candidates, usedAnchorIds, (a) => distanceMeters(morning, a) <= MAX_ANCHOR_LEG_M)
+    : pickAnchor(candidates, usedAnchorIds, () => true)
+  if (afternoon) usedAnchorIds.add(afternoon.id)
+
+  const night = pickAnchor(candidates, usedAnchorIds, (a) => a.dayPart === 'night')
+  if (night) usedAnchorIds.add(night.id)
+
+  const chosen = [morning, afternoon, night].filter(Boolean)
+  // 标签按「填的是哪个位置」来定，不能按锚点自身的 dayPart 定 ——
+  // 文和友 dayPart=night 但可能填的是下午的位置
+  const dayAnchors = []
+  if (morning) dayAnchors.push({ part: 'morning', anchor: morning })
+  if (afternoon) dayAnchors.push({ part: 'afternoon', anchor: afternoon })
+  if (night) dayAnchors.push({ part: 'night', anchor: night })
+
+  const morningCenter = morning ?? afternoon ?? night ?? null
+  const dinnerCenter = afternoon ?? morning ?? night ?? null
+
+  const meals = []
+  for (const slot of MEAL_SLOTS) {
+    // 吃+逛复合体先占位：它就是这一餐
+    const dining = chosen.find((a) => a.kind === 'dining' && a.mealHint === slot.key)
+    if (dining) {
+      usedGroups.add('dining')
+      meals.push({
+        slot: slot.key,
+        slotLabel: slot.label,
+        shop: null,
+        anchor: dining,
+        dishTag: null,
+        dishGroup: 'dining',
+        cost: null,
+        estimatedCost: false,
+        hoursKnown: Boolean(dining.opentimeWeek),
+        relaxed: false,
+        fromAnchor: true,
+      })
+      continue
+    }
+
+    const center = slot.key === 'dinner' ? dinnerCenter : morningCenter
+    if (!center) {
+      notes.push(`${slot.label}：当天没有可用锚点，无法就近安排`)
+      continue
+    }
+
+    const picked = pickMealNear(shops, center, perMeal, slot, usedShopIds, usedGroups)
+    if (!picked) {
+      notes.push(`${slot.label}：锚点周边 3 km 内没有可选餐厅`)
+      continue
+    }
+
+    if (picked.level !== 'strict') {
+      notes.push(`${slot.label}：锚点周边该价位无可选，已放宽到 ${Math.round(perMeal)} 元以内`)
+    }
+    if (picked.radius > 800) {
+      notes.push(`${slot.label}：锚点 800 m 内不够选，已放宽到 ${picked.radius} m 内`)
+    }
+
+    const parsed = parseOpeningHours(picked.shop.opentimeWeek)
+    if (!parsed.known) notes.push(`${slot.label}：${picked.shop.name} 营业时间未知`)
+
+    const group = dishGroup(picked.shop)
+    if (group) usedGroups.add(group)
+    usedShopIds.add(picked.shop.id)
+
+    meals.push({
+      slot: slot.key,
+      slotLabel: slot.label,
+      shop: picked.shop,
+      anchor: null,
+      dishTag: dishTag(picked.shop),
+      dishGroup: group,
+      cost: picked.shop.cost ?? null,
+      estimatedCost: picked.shop.costSource === 'district-median',
+      hoursKnown: parsed.known,
+      relaxed: picked.level !== 'strict',
+      fromAnchor: false,
+      searchRadius: picked.radius,
+    })
+  }
+
+  if (!chosen.length) {
+    notes.push('锚点已用完，这一天只排了餐 —— 建议缩短天数或补充锚点清单')
+  }
+
+  // 当天走过的路径：锚点 → 午餐 → 锚点 → 晚餐 → 夜间锚点
+  const path = []
+  if (morning) path.push(morning)
+  const lunch = meals.find((m) => m.slot === 'lunch')
+  if (lunch?.shop) path.push(lunch.shop)
+  if (afternoon) path.push(afternoon)
+  const dinner = meals.find((m) => m.slot === 'dinner')
+  if (dinner?.shop) path.push(dinner.shop)
+  if (night) path.push(night)
+
+  let legMeters = 0
+  for (let i = 1; i < path.length; i += 1) {
+    legMeters += distanceMeters(path[i - 1], path[i])
+  }
+
+  return { anchors: dayAnchors, meals, notes, legMeters }
+}
+
+/** 锚点模式：先定每天的锚点，再就近安排三餐 */
+function buildAnchorItinerary({ days, dailyBudget, anchors }, shops) {
+  const nDays = Math.max(1, Math.floor(days || 1))
+  const budget = Number(dailyBudget) || 50
+  const perMeal = budget / 3
+
+  const usedAnchorIds = new Set()
+  const usedShopIds = new Set()
+  const plan = []
+  const notes = []
+
+  for (let d = 0; d < nDays; d += 1) {
+    const day = buildAnchorDay(d, anchors, shops, perMeal, usedAnchorIds, usedShopIds)
+    plan.push({
+      dayIndex: d,
+      district: day.anchors[0]?.anchor.district ?? '',
+      anchors: day.anchors,
+      meals: day.meals,
+      notes: day.notes,
+      legMeters: Math.round(day.legMeters),
+    })
+  }
+
+  const allMeals = plan.flatMap((p) => p.meals)
+  const shopMeals = allMeals.filter((m) => m.shop)
+  const anchorMeals = allMeals.filter((m) => m.fromAnchor)
+  const totalCost = shopMeals.reduce((sum, m) => sum + (m.cost ?? 0), 0)
+  const chainCount = shopMeals.filter((m) => m.shop.isChain).length
+  const allAnchors = plan.flatMap((p) => p.anchors.map((a) => a.anchor))
+
+  const summary = {
+    days: nDays,
+    dailyBudget: budget,
+    perMealBudget: Math.round(perMeal * 100) / 100,
+    priceFloor: Math.round(perMeal * PRICE_FLOOR_RATIO),
+    mealCount: allMeals.length,
+    totalCost: Math.round(totalCost),
+    avgPerMeal: shopMeals.length
+      ? Math.round((totalCost / shopMeals.length) * 10) / 10
+      : 0,
+    dishTypeCount: new Set(shopMeals.map((m) => m.dishGroup).filter(Boolean)).size,
+    chainCount,
+    chainRate: shopMeals.length ? Math.round((chainCount / shopMeals.length) * 100) : 0,
+    localProxyCount: shopMeals.filter((m) => (m.shop.distToWuyiM ?? 0) >= 2000).length,
+    estimatedCostCount: shopMeals.filter((m) => m.estimatedCost).length,
+    unknownHoursCount: allMeals.filter((m) => !m.hoursKnown).length,
+    relaxedCount: allMeals.filter((m) => m.relaxed).length,
+    totalLegMeters: plan.reduce((sum, p) => sum + p.legMeters, 0),
+    anchorCount: allAnchors.length,
+    diningAnchorCount: allAnchors.filter((a) => a.kind === 'dining').length,
+    attractionCount: allAnchors.filter((a) => a.kind !== 'dining').length,
+  }
+
+  return {
+    plan,
+    summary,
+    notes: [
+      ...notes,
+      '锚点来自人工整理的清单；游览时长与票价为估计值，尚未实地核验。',
+      '餐厅在锚点周边 800 m 内优先，不够时逐级放宽 —— 每条放宽都会单独提示。',
+    ],
+  }
+}
+
+/**
+ * 对外入口：给了 anchors 就走锚点模式，否则维持片区模式。
+ * 保持向后兼容，旧调用方不用改。
+ */
+export function buildItinerary(params, shops) {
+  const anchors = params?.anchors
+  if (Array.isArray(anchors) && anchors.length) {
+    return buildAnchorItinerary(params, shops)
+  }
+  return buildDistrictItinerary(params, shops)
 }

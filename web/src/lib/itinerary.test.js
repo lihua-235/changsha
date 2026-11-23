@@ -20,6 +20,7 @@ import {
   compareTiers,
   dishGroup,
   dishTag,
+  distanceMeters,
   openInSlot,
   parseOpeningHours,
 } from './itinerary.js'
@@ -227,5 +228,88 @@ describe('compareTiers：三档必须产生实质差异', () => {
 
   test('便宜档的人均不超过其单餐预算', () => {
     assert.ok(cheap.summary.avgPerMeal <= cheap.summary.perMealBudget + 0.01)
+  })
+})
+
+/* ---------------- 锚点模式（anchor-first） ---------------- */
+
+const ANCHORS = (() => {
+  const p = fileURLToPath(new URL('../../public/data/anchors.json', import.meta.url))
+  return JSON.parse(readFileSync(p, 'utf8'))
+})()
+
+describe('锚点模式：先去哪玩，再就近吃', () => {
+  const usable = ANCHORS.filter((a) => a.foodAvailable)
+
+  test('锚点数据里至少有一批可用锚点', () => {
+    assert.ok(usable.length >= 15, `可用锚点只有 ${usable.length} 个`)
+  })
+
+  test('每天都有锚点，且都是可排程锚点', () => {
+    const r = buildItinerary({ days: 2, dailyBudget: 150, anchors: ANCHORS }, SHOPS)
+    for (const day of r.plan) {
+      assert.ok(day.anchors.length >= 1, `第 ${day.dayIndex + 1} 天没有锚点`)
+      for (const a of day.anchors) {
+        assert.equal(a.anchor.foodAvailable, true, `${a.anchor.name} 不可排程却被选中`)
+      }
+    }
+  })
+
+  test('整份行程内锚点不重复', () => {
+    const r = buildItinerary({ days: 3, dailyBudget: 150, anchors: ANCHORS }, SHOPS)
+    const ids = r.plan.flatMap((p) => p.anchors.map((a) => a.anchor.id))
+    assert.equal(new Set(ids).size, ids.length, '出现重复锚点')
+  })
+
+  test('吃+逛复合体占掉对应餐次，不再额外配店', () => {
+    const r = buildItinerary({ days: 3, dailyBudget: 400, anchors: ANCHORS }, SHOPS)
+    const fromAnchor = r.plan
+      .flatMap((p) => p.meals)
+      .filter((m) => m.fromAnchor)
+    for (const m of fromAnchor) {
+      assert.equal(m.shop, null, '复合体餐次不应再配一家店')
+      assert.equal(m.anchor.kind, 'dining')
+      assert.equal(m.anchor.mealHint, m.slot, '复合体应占自己该占的餐次')
+    }
+  })
+
+  test('午餐落在上午锚点 3 km 内', () => {
+    const r = buildItinerary({ days: 2, dailyBudget: 150, anchors: ANCHORS }, SHOPS)
+    for (const day of r.plan) {
+      const morning = day.anchors.find((a) => a.part === 'morning')?.anchor
+      const lunch = day.meals.find((m) => m.slot === 'lunch' && m.shop)
+      if (!morning || !lunch) continue
+      const d = distanceMeters(morning, lunch.shop)
+      assert.ok(d <= 3000, `${morning.name} 到午餐 ${d.toFixed(0)}m，超过 3km`)
+    }
+  })
+
+  test('确定性：同样输入跑两次结果一致', () => {
+    const params = { days: 2, dailyBudget: 150, anchors: ANCHORS }
+    assert.deepEqual(buildItinerary(params, SHOPS), buildItinerary(params, SHOPS))
+  })
+
+  test('三档预算在锚点模式下依然产生不同花费', () => {
+    const rows = [50, 150, 400].map((dailyBudget) =>
+      buildItinerary({ days: 2, dailyBudget, anchors: ANCHORS }, SHOPS)
+    )
+    const costs = rows.map((r) => r.summary.totalCost)
+    assert.ok(costs[0] < costs[1] && costs[1] < costs[2], `花费未递增: ${costs.join(' / ')}`)
+  })
+
+  test('锚点用完后给出提示，而不是静默乱排', () => {
+    // 可用锚点 23 个，每天最多 3 个 → 12 天必然用尽
+    const r = buildItinerary({ days: 12, dailyBudget: 150, anchors: ANCHORS }, SHOPS)
+    const used = r.plan.flatMap((p) => p.anchors).length
+    assert.ok(used <= usable.length, '锚点使用数超过可用数')
+    const hasHint = r.plan.some((p) => p.notes.some((n) => n.includes('锚点已用完')))
+    assert.ok(hasHint, '锚点用尽时应给出提示')
+  })
+
+  test('summary 区分景点数与吃逛数', () => {
+    const r = buildItinerary({ days: 3, dailyBudget: 150, anchors: ANCHORS }, SHOPS)
+    const s = r.summary
+    assert.equal(s.anchorCount, s.attractionCount + s.diningAnchorCount)
+    assert.ok(s.anchorCount > 0)
   })
 })
