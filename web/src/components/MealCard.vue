@@ -6,15 +6,21 @@ const props = defineProps({
   legMeters: { type: Number, default: null },
 })
 
-const shop = computed(() => props.meal.shop)
+const shop = computed(() => props.meal.shop ?? null)
+/** 吃+逛复合体占掉的餐次：没有具体店铺，这一餐就是那个景点 */
+const diningAnchor = computed(() =>
+  props.meal.fromAnchor ? props.meal.anchor ?? null : null
+)
+
+const title = computed(() => shop.value?.name ?? diningAnchor.value?.name ?? '—')
 
 const priceLabel = computed(() => {
-  if (props.meal.cost == null) return '价格未知'
+  if (props.meal.cost == null) return diningAnchor.value ? '人均见景点说明' : '价格未知'
   return `¥${props.meal.cost}`
 })
 
 const distLabel = computed(() => {
-  const m = shop.value.distToWuyiM
+  const m = shop.value?.distToWuyiM
   if (m == null) return null
   return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${m} m`
 })
@@ -32,15 +38,19 @@ const legLabel = computed(() => {
     <div class="slot">{{ meal.slotLabel }}</div>
 
     <div class="body">
-      <RouterLink :to="`/shop/${shop.slug}/${shop.id}`" class="name">
-        {{ shop.name }}
+      <RouterLink v-if="shop" :to="`/shop/${shop.slug}/${shop.id}`" class="name">
+        {{ title }}
       </RouterLink>
+      <span v-else class="name name-static">{{ title }}</span>
 
       <div class="meta">
+        <span v-if="diningAnchor" class="chip dining">吃+逛 · 不另配餐</span>
         <span class="cost" :class="{ faint: meal.cost == null }">{{ priceLabel }}</span>
-        <span v-if="meal.dishGroup" class="chip">{{ meal.dishGroup }}</span>
+        <span v-if="meal.dishGroup && meal.dishGroup !== 'dining'" class="chip">
+          {{ meal.dishGroup }}
+        </span>
         <span v-if="distLabel" class="chip">距核心区 {{ distLabel }}</span>
-        <span v-if="shop.isChain" class="chip">连锁</span>
+        <span v-if="shop?.isChain" class="chip">连锁</span>
       </div>
 
       <div v-if="meal.estimatedCost || !meal.hoursKnown || meal.relaxed" class="flags">
@@ -96,6 +106,15 @@ const legLabel = computed(() => {
 }
 .name:hover {
   color: var(--accent);
+}
+.name-static {
+  color: var(--ink);
+}
+.chip.dining {
+  background: #f0fdf4;
+  color: #15803d;
+  border-color: #bbf7d0;
+  font-weight: 600;
 }
 
 .meta {

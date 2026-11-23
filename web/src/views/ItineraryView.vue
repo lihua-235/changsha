@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { listDistricts, listShops } from '../data/provider.js'
-import { BUDGET_TIERS, buildItinerary } from '../lib/itinerary.js'
+import { listDistricts, listShops, listAnchors } from '../data/provider.js'
+import { BUDGET_TIERS, DEFAULT_PACE, PACES, buildItinerary } from '../lib/itinerary.js'
 import BudgetPicker from '../components/BudgetPicker.vue'
 import DayTimeline from '../components/DayTimeline.vue'
 import TierCompare from '../components/TierCompare.vue'
@@ -15,6 +15,8 @@ const loadError = ref('')
 const days = ref(2)
 const budget = ref(150)
 const selectedSlugs = ref([])
+const anchors = ref([])
+const pace = ref(DEFAULT_PACE)
 const hasGenerated = ref(false)
 
 onMounted(async () => {
@@ -29,6 +31,7 @@ onMounted(async () => {
     districts.value.map((d) => listShops({ districtSlug: d.slug }))
   )
   allShops.value = lists.flat()
+  anchors.value = await listAnchors()
   loading.value = false
 })
 
@@ -62,9 +65,13 @@ function toggleDistrict(slug) {
   selectedSlugs.value = districts.value.map((d) => d.slug).filter((s) => set.has(s))
 }
 
-const poolShops = computed(() =>
-  allShops.value.filter((s) => selectedSlugs.value.includes(s.slug))
-)
+/** 有锚点就走锚点模式：锚点是全城选的，不再按片区过滤餐厅 */
+const anchorMode = computed(() => anchors.value.length > 0)
+
+const poolShops = computed(() => {
+  if (anchorMode.value) return allShops.value
+  return allShops.value.filter((s) => selectedSlugs.value.includes(s.slug))
+})
 
 /** 三档一起算：切换档位是纯切换，不重新计算 */
 const built = computed(() => {
@@ -72,7 +79,13 @@ const built = computed(() => {
   return BUDGET_TIERS.map((tier) => ({
     tier,
     it: buildItinerary(
-      { days: days.value, dailyBudget: tier.value, districtSlugs: selectedSlugs.value },
+      {
+        days: days.value,
+        dailyBudget: tier.value,
+        districtSlugs: selectedSlugs.value,
+        anchors: anchorMode.value ? anchors.value : undefined,
+        pace: pace.value,
+      },
       poolShops.value
     ),
   }))
@@ -145,7 +158,24 @@ function generate() {
         <BudgetPicker v-model="budget" />
       </div>
 
-      <div class="ctrl-row">
+      <div v-if="anchorMode" class="ctrl-row">
+        <span class="ctrl-label">一天的节奏</span>
+        <div class="paces">
+          <button
+            v-for="p in PACES"
+            :key="p.key"
+            type="button"
+            class="pace"
+            :class="{ active: pace === p.key }"
+            @click="pace = p.key"
+          >
+            <span class="pace-label">{{ p.label }}</span>
+            <span class="pace-desc">{{ p.desc }}</span>
+          </button>
+        </div>
+      </div>
+
+      <div v-else class="ctrl-row">
         <span class="ctrl-label">片区</span>
         <div class="districts">
           <button
@@ -166,8 +196,14 @@ function generate() {
           {{ hasGenerated ? '重新生成' : '生成行程' }}
         </button>
         <span class="pool-hint">
-          候选 {{ poolShops.length.toLocaleString('zh-CN') }} 家 ·
-          {{ selectedSlugs.length }} 个片区
+          <template v-if="anchorMode">
+            {{ anchors.filter((a) => a.foodAvailable).length }} 个可排程锚点 ·
+            候选 {{ poolShops.length.toLocaleString('zh-CN') }} 家店
+          </template>
+          <template v-else>
+            候选 {{ poolShops.length.toLocaleString('zh-CN') }} 家 ·
+            {{ selectedSlugs.length }} 个片区
+          </template>
         </span>
       </div>
     </section>
@@ -196,6 +232,9 @@ function generate() {
         <h2>{{ current.tier.label }} 的行程</h2>
         <span class="hint">
           {{ current.it.summary.days }} 天 · {{ current.it.summary.mealCount }} 餐
+          <template v-if="current.it.summary.anchorCount">
+            · {{ current.it.summary.anchorCount }} 个锚点
+          </template>
         </span>
       </div>
 
@@ -213,7 +252,7 @@ function generate() {
       v-else
       icon="◔"
       title="还没生成行程"
-      desc="选好天数、预算和片区，点「生成行程」。三档预算会一起算出来，方便对比。"
+      desc="选好天数、预算和节奏，点「生成行程」。三档预算会一起算出来，方便对比。"
     />
   </template>
 </template>
@@ -332,6 +371,51 @@ function generate() {
   color: var(--accent);
   background: var(--accent-soft);
   font-weight: 600;
+}
+
+.paces {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.pace {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 11px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r);
+  background: #fff;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.pace:hover {
+  border-color: #d6d3d1;
+}
+.pace.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.pace-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.pace.active .pace-label {
+  color: var(--accent);
+}
+.pace-desc {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+@media (max-width: 420px) {
+  .pace-desc {
+    display: none;
+  }
 }
 
 .actions {
