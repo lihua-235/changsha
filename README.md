@@ -121,7 +121,12 @@ npm run dev                           # 3. 打开 http://localhost:5173
   esbuild 的二进制来自平台包 `@esbuild/win32-x64`，构建不受影响。
 
 **当前进度**：站点骨架、数据导出、片区列表与店铺详情已完成；
-规则版行程生成（Step 3）尚未实现，`/itinerary` 页面会明确说明，不提供假行程。
+**规则版行程算法已完成**（`web/src/lib/itinerary.js`），44 项测试通过，行程页 UI 待接入。
+
+```bash
+cd web
+npm test        # 跑行程算法的 44 项测试（用 Node 内置 test runner，无额外依赖）
+```
 
 两条设计约束：
 
