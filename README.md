@@ -100,18 +100,25 @@ python scripts/make_route.py
 `web/` 是一个 Vue 3 + Vite 单页应用，数据读 `web/public/data/` 下的静态 JSON，
 **不需要后端、不需要高德 Key、不联网也能跑**。
 
-前置：[Node.js 18+ LTS](https://nodejs.org/)。装好后执行一次 `corepack enable`，
-即可获得与 `package.json` 中 `packageManager` 字段一致的 pnpm 版本（无需单独装 pnpm）。
+前置：[Node.js 18+](https://nodejs.org/) —— 自带 npm，**不需要额外安装包管理器**。
+（Node 25 起发行版已移除 corepack，所以本项目走 npm，少一层依赖。）
 
 ```bash
 python scripts/export_web_data.py     # 1. 生成/刷新前端数据
 cd web
-pnpm install                          # 2. 装依赖（首次）
-pnpm run dev                          # 3. 打开 http://localhost:5173
+npm install                           # 2. 装依赖（首次）
+npm run dev                           # 3. 打开 http://localhost:5173
 ```
 
-构建：`pnpm run build` → `web/dist/`。已设 `base: './'` + hash 路由，
+构建：`npm run build` → `web/dist/`。已设 `base: './'` + hash 路由，
 产物可直接放进 GitHub Pages 子路径，无需服务端配置。
+
+两个 Windows 上的常见提示：
+
+- 若 PowerShell 报「禁止运行脚本」，把命令写成 `npm.cmd install` / `npm.cmd run dev`，
+  或执行一次 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`。
+- 安装时若出现 `esbuild ... not covered by allowScripts`，那只是**警告**：
+  esbuild 的二进制来自平台包 `@esbuild/win32-x64`，构建不受影响。
 
 **当前进度**：站点骨架、数据导出、片区列表与店铺详情已完成；
 规则版行程生成（Step 3）尚未实现，`/itinerary` 页面会明确说明，不提供假行程。
