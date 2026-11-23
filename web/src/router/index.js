@@ -5,6 +5,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 const routes = [
   { path: '/', name: 'home', component: () => import('../views/HomeView.vue') },
   { path: '/explore/:district', name: 'explore', component: () => import('../views/ExploreView.vue'), props: true },
+  { path: '/anchors', name: 'anchors', component: () => import('../views/AnchorsView.vue') },
   // 详情页把片区 slug 放进 URL：这样只需加载该片区一个文件，
   // 不必为了查一个 id 而拉取整份跨片区索引。
   { path: '/shop/:slug/:id', name: 'shop', component: () => import('../views/ShopDetailView.vue'), props: true },

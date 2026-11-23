@@ -110,6 +110,11 @@ export async function searchShops(keyword, limit = 60) {
 
 /* ---------------- 约束数据（只用于行程排程） ---------------- */
 
+/** 行程锚点（景点）：人工台账 + 接口补全，含周边餐饮覆盖度 */
+export async function listAnchors() {
+  return tryOnce('anchors.json', [])
+}
+
 export async function listScenics() {
   return tryOnce('scenics.json', [])
 }

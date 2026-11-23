@@ -11,6 +11,7 @@ import AppFooter from './components/AppFooter.vue'
         </RouterLink>
         <nav class="topnav">
           <RouterLink to="/">首页</RouterLink>
+          <RouterLink to="/anchors">景点</RouterLink>
           <RouterLink to="/itinerary">行程</RouterLink>
           <RouterLink to="/about">关于</RouterLink>
         </nav>
