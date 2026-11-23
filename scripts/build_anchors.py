@@ -208,6 +208,9 @@ def main():
             "ticketCny": r["ticket_cny"],
             "mustSee": r["must_see"],
             "why": r["why"],
+            # 纯景点 / 吃+逛复合体（文和友这类，自身就占掉一个餐次）
+            "kind": r.get("kind") or "attraction",
+            "mealHint": r.get("meal_hint") or "",
             "durationSource": r["duration_source"],
             "ticketSource": r["ticket_source"],
             "verified": r["verified"],

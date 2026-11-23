@@ -265,6 +265,10 @@ def export_anchors(shops):
             "ticketCny": as_int(r.ticketCny),
             "mustSee": str(r.mustSee).strip() == "1",
             "why": as_str(r.why),
+            # attraction = 纯景点；dining = 吃+逛复合体（文和友、火宫殿），
+            # 这类地方本身就能占掉一个餐次，排程时要避免和自己重复
+            "kind": as_str(getattr(r, "kind", None)) or "attraction",
+            "mealHint": as_str(getattr(r, "mealHint", None)),
             "durationSource": as_str(r.durationSource),
             "ticketSource": as_str(r.ticketSource),
             "verified": str(r.verified).strip() == "是",

@@ -53,6 +53,13 @@ function ticketLabel(cny) {
   return cny === 0 ? '免费' : `¥${cny}`
 }
 
+function hoursText(hint) {
+  if (hint === 'breakfast') return '早餐'
+  if (hint === 'lunch') return '午餐'
+  if (hint === 'dinner') return '晚餐'
+  return ''
+}
+
 function amapUri(a) {
   const params = new URLSearchParams({
     position: `${a.lng},${a.lat}`,
@@ -70,6 +77,10 @@ function amapUri(a) {
     这份清单是<strong>人工整理</strong>的 {{ stats.total }} 个锚点，不是从接口自动抓的。
     原因：高德把岳麓山拆成「飞来石」「翊武亭」等子景点，而湖南省博物馆这类
     <strong>根本不在</strong>我们的采集类目里。
+  </p>
+  <p class="page-lead note">
+    其中标着「<strong>吃+逛</strong>」的是复合体（文和友、火宫殿）——它们既是景点，
+    本身就是一顿饭，排程时不能再额外配餐。
   </p>
 
   <div v-if="loading" class="grid">
@@ -108,6 +119,9 @@ function amapUri(a) {
         </header>
 
         <div class="meta">
+          <span v-if="a.kind === 'dining'" class="chip dining">
+            吃+逛<span v-if="hoursText(a.mealHint)"> · 建议{{ hoursText(a.mealHint) }}</span>
+          </span>
           <span class="chip">{{ durationLabel(a.durationMin) }}·估</span>
           <span class="chip">{{ ticketLabel(a.ticketCny) }}·估</span>
           <span v-if="a.foodAvailable" class="chip badge-real">
@@ -144,6 +158,10 @@ function amapUri(a) {
   gap: 6px;
   flex-wrap: wrap;
   margin-bottom: 14px;
+}
+.note {
+  margin-top: -8px;
+  font-size: 13px;
 }
 .filter {
   display: inline-flex;
@@ -205,6 +223,12 @@ function amapUri(a) {
   background: var(--accent-soft);
   color: var(--accent);
   border-color: #fed7aa;
+  font-weight: 600;
+}
+.chip.dining {
+  background: #f0fdf4;
+  color: #15803d;
+  border-color: #bbf7d0;
   font-weight: 600;
 }
 .district {
