@@ -130,7 +130,8 @@ export function dishGroup(shop) {
 
 /* ---------------- 工具 ---------------- */
 
-function distM(a, b) {
+/** 两点间直线距离（米）。也用在前端展示"上一餐到这餐多远" */
+export function distanceMeters(a, b) {
   const latDeg = 110540
   const lngDeg = 111320 * Math.cos((((a.lat ?? 0) + (b.lat ?? 0)) / 2) * (Math.PI / 180))
   return Math.hypot(((a.lng ?? 0) - (b.lng ?? 0)) * lngDeg, ((a.lat ?? 0) - (b.lat ?? 0)) * latDeg)
@@ -184,7 +185,7 @@ function buildDay(pool, perMeal, usedIds) {
       // 找不到落点时才放宽，这样"可执行"是被优先保证的。
       const prev = meals[meals.length - 1]
       if (prev) {
-        const near = finalPool.filter((s) => distM(prev.shop, s) <= MAX_LEG_M)
+        const near = finalPool.filter((s) => distanceMeters(prev.shop, s) <= MAX_LEG_M)
         if (near.length) finalPool = near
       }
 
@@ -240,7 +241,7 @@ function buildDay(pool, perMeal, usedIds) {
 
   let legMeters = 0
   for (let i = 1; i < meals.length; i += 1) {
-    const leg = distM(meals[i - 1].shop, meals[i].shop)
+    const leg = distanceMeters(meals[i - 1].shop, meals[i].shop)
     if (leg > MAX_LEG_M) {
       notes.push(
         `${meals[i].slotLabel}：距上一餐 ${(leg / 1000).toFixed(1)} km，当天路线偏散，建议打车`
