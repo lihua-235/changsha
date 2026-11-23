@@ -100,6 +100,9 @@ python scripts/make_route.py
 `web/` 是一个 Vue 3 + Vite 单页应用，数据读 `web/public/data/` 下的静态 JSON，
 **不需要后端、不需要高德 Key、不联网也能跑**。
 
+前置：[Node.js 18+ LTS](https://nodejs.org/)。装好后执行一次 `corepack enable`，
+即可获得与 `package.json` 中 `packageManager` 字段一致的 pnpm 版本（无需单独装 pnpm）。
+
 ```bash
 python scripts/export_web_data.py     # 1. 生成/刷新前端数据
 cd web
