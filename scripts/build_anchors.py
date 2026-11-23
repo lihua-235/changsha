@@ -211,6 +211,8 @@ def main():
             # 纯景点 / 吃+逛复合体（文和友这类，自身就占掉一个餐次）
             "kind": r.get("kind") or "attraction",
             "mealHint": r.get("meal_hint") or "",
+            # 适合的时段：morning / afternoon / night，空表示不限
+            "dayPart": r.get("day_part") or "",
             "durationSource": r["duration_source"],
             "ticketSource": r["ticket_source"],
             "verified": r["verified"],

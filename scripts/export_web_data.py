@@ -269,6 +269,8 @@ def export_anchors(shops):
             # 这类地方本身就能占掉一个餐次，排程时要避免和自己重复
             "kind": as_str(getattr(r, "kind", None)) or "attraction",
             "mealHint": as_str(getattr(r, "mealHint", None)),
+            # 适合时段：morning / afternoon / night，空表示不限
+            "dayPart": as_str(getattr(r, "dayPart", None)),
             "durationSource": as_str(r.durationSource),
             "ticketSource": as_str(r.ticketSource),
             "verified": str(r.verified).strip() == "是",

@@ -60,6 +60,13 @@ function hoursText(hint) {
   return ''
 }
 
+function partText(part) {
+  if (part === 'morning') return '上午'
+  if (part === 'afternoon') return '下午'
+  if (part === 'night') return '夜间'
+  return ''
+}
+
 function amapUri(a) {
   const params = new URLSearchParams({
     position: `${a.lng},${a.lat}`,
@@ -124,6 +131,7 @@ function amapUri(a) {
           </span>
           <span class="chip">{{ durationLabel(a.durationMin) }}·估</span>
           <span class="chip">{{ ticketLabel(a.ticketCny) }}·估</span>
+          <span v-if="a.dayPart" class="chip night">宜{{ partText(a.dayPart) }}</span>
           <span v-if="a.foodAvailable" class="chip badge-real">
             周边 {{ a.foodCount800m }} 家餐饮 · 可排程
           </span>
@@ -230,6 +238,11 @@ function amapUri(a) {
   color: #15803d;
   border-color: #bbf7d0;
   font-weight: 600;
+}
+.chip.night {
+  background: #eef2ff;
+  color: #4338ca;
+  border-color: #c7d2fe;
 }
 .district {
   margin-left: auto;
