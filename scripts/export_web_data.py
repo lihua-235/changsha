@@ -23,6 +23,7 @@ Step 1 · 把离线 CSV 导出成前端用的静态 JSON
 
 import gzip
 import json
+import math
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -207,6 +208,77 @@ def dump(obj, path):
     return raw, gz
 
 
+def export_anchors(shops):
+    """行程锚点（景点）：人工台账 + 接口补全 + 周边餐饮覆盖度
+
+    覆盖度是必须字段：锚点在城区外时，周边没有餐饮数据，
+    行程就排不出三餐。前端据此决定「能否参与自动排程」。
+    """
+    path = DATA / "anchors_enriched.csv"
+    if not path.exists():
+        print("  ⚠ 未找到 anchors_enriched.csv，跳过锚点导出（先跑 build_anchors.py）")
+        return []
+
+    df = pd.read_csv(path, encoding="utf-8-sig")
+    coords = [(s["lng"], s["lat"]) for s in shops if s["lng"] is not None]
+
+    out = []
+    for r in df.itertuples(index=False):
+        if pd.isna(r.lng) or pd.isna(r.lat):
+            continue
+        lng, lat = float(r.lng), float(r.lat)
+        lat_deg = 110540.0
+        lng_deg = 111320.0 * math.cos(math.radians(lat))
+
+        n800 = n1500 = 0
+        for x, y in coords:
+            dx = (x - lng) * lng_deg
+            dy = (y - lat) * lat_deg
+            d2 = dx * dx + dy * dy
+            if d2 <= 800 * 800:
+                n800 += 1
+            if d2 <= 1500 * 1500:
+                n1500 += 1
+
+        poi_name = as_str(r.poiName)
+        notice = None
+        if poi_name and "暂停开放" in poi_name:
+            notice = "该点当前暂停开放"
+        elif poi_name and ("装修" in poi_name or "闭馆" in poi_name):
+            notice = "该点当前可能闭馆"
+
+        out.append({
+            "id": as_str(r.poiId) or as_str(r.name),
+            "name": as_str(r.name),
+            "poiName": poi_name,
+            "district": as_str(r.district),
+            "slug": slug_of(as_str(r.district)),
+            "lng": as_float(lng),
+            "lat": as_float(lat),
+            "address": as_str(r.address),
+            "opentimeWeek": as_str(r.opentimeWeek),
+            "tel": as_str(r.tel),
+            "rating": as_float(r.rating, 1),
+            "typecode": as_str(r.typecode),
+            # —— 人工判断，全部标了来源 ——
+            "durationMin": as_int(r.durationMin),
+            "ticketCny": as_int(r.ticketCny),
+            "mustSee": str(r.mustSee).strip() == "1",
+            "why": as_str(r.why),
+            "durationSource": as_str(r.durationSource),
+            "ticketSource": as_str(r.ticketSource),
+            "verified": str(r.verified).strip() == "是",
+            # —— 周边餐饮覆盖度 ——
+            "foodCount800m": n800,
+            "foodCount1500m": n1500,
+            "foodAvailable": n800 >= 6,
+            "notice": notice,
+        })
+
+    out.sort(key=lambda x: (x["district"] or "", x["name"] or ""))
+    return out
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
 
@@ -257,16 +329,27 @@ def main():
     total_raw += r; total_gz += g
     print(f"{'hotels.json':<28}{len(hotels):>7}{r/1024:>9.0f} KB{g/1024:>7.0f} KB")
 
+    anchors = export_anchors(shops)
+    r, g = dump(anchors, OUT / "anchors.json")
+    total_raw += r; total_gz += g
+    print(f"{'anchors.json':<28}{len(anchors):>7}{r/1024:>9.0f} KB{g/1024:>7.0f} KB")
+
     meta = {
         "schemaVersion": SCHEMA_VERSION,
         "generatedAt": snapshot_time(
             DATA / "cleaned_all.csv",
             DATA / "scenic" / "poi_all.csv",
             DATA / "hotel" / "poi_all.csv",
+            DATA / "anchors_enriched.csv",
         ),
-        "source": "amap place/around v5",
+        "source": "amap place/around v5 + place/text v5",
         "attribution": "数据来源：高德地图",
-        "counts": {"shops": len(shops), "scenics": len(scenics), "hotels": len(hotels)},
+        "counts": {
+            "shops": len(shops),
+            "scenics": len(scenics),
+            "hotels": len(hotels),
+            "anchors": len(anchors),
+        },
         "districts": district_meta,
         "note": "localScore 需人工实地标注，当前全部为 null；dataStatus 全为 amap-only。",
     }
