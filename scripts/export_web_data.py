@@ -24,6 +24,7 @@ Step 1 · 把离线 CSV 导出成前端用的静态 JSON
 import gzip
 import json
 import math
+import re
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -285,6 +286,72 @@ def export_anchors(shops):
     return out
 
 
+NIGHT_KW = re.compile(r"烧烤|小龙虾|口味虾|夜宵|大排档|串")
+
+
+def late_night(text):
+    """营业时间是否延伸到凌晨（收摊在凌晨 1 点之后）"""
+    if not isinstance(text, str):
+        return False
+    for m in re.finditer(r"(\d{1,2}):(\d{2})\s*[-–—~至]\s*(\d{1,2}):(\d{2})", text):
+        o = int(m.group(1)) * 60 + int(m.group(2))
+        c = int(m.group(3)) * 60 + int(m.group(4))
+        if c <= o:
+            c += 24 * 60
+        if c >= 24 * 60 + 60:
+            return True
+    return False
+
+
+def district_profile(rows):
+    """从数据里算片区特征，并据此生成标签。
+
+    标签全部由阈值推导，**不写死**。所以「四方坪主打夜市」这种印象
+    如果数据不支持，就不会出现在标签里。
+    """
+    n = len(rows)
+    if not n:
+        return {"tags": [], "stats": {}}
+
+    costs = [r["cost"] for r in rows if r["cost"] is not None]
+    median_cost = round(float(pd.Series(costs).median()), 1) if costs else None
+    chain = sum(1 for r in rows if r["isChain"]) / n
+    living = sum(1 for r in rows if (r["distToWuyiM"] or 0) >= 3000) / n
+    core = sum(1 for r in rows if (r["distToWuyiM"] if r["distToWuyiM"] is not None else 99999) < 1000) / n
+    late = sum(1 for r in rows if late_night(r["opentimeWeek"])) / n
+    night_food = sum(1 for r in rows if NIGHT_KW.search(r["keytag"] or "")) / n
+
+    tags = []
+    if core >= 0.30:
+        tags.append({"text": "游客核心区", "why": f"{core:.0%} 的店距核心区 1 km 内"})
+    if living >= 0.80:
+        tags.append({"text": "本地生活区", "why": f"{living:.0%} 的店在 3 km 外"})
+    if late >= 0.18:
+        tags.append({"text": "夜宵活跃", "why": f"{late:.0%} 的店营业到凌晨"})
+    if night_food >= 0.06:
+        tags.append({"text": "夜宵品类多", "why": f"{night_food:.0%} 是烧烤/小龙虾类"})
+    if median_cost is not None and median_cost <= 25:
+        tags.append({"text": "人均便宜", "why": f"人均中位数 ¥{median_cost:.0f}"})
+    if median_cost is not None and median_cost >= 29:
+        tags.append({"text": "价格偏高", "why": f"人均中位数 ¥{median_cost:.0f}"})
+    if chain >= 0.24:
+        tags.append({"text": "连锁密集", "why": f"{chain:.0%} 是连锁"})
+    if late <= 0.08:
+        tags.append({"text": "夜里冷清", "why": f"仅 {late:.0%} 的店营业到凌晨"})
+
+    return {
+        "tags": tags,
+        "stats": {
+            "medianCost": median_cost,
+            "chainRate": round(chain * 100),
+            "livingShare": round(living * 100),
+            "coreShare": round(core * 100),
+            "lateNightShare": round(late * 100),
+            "nightFoodShare": round(night_food * 100),
+        },
+    }
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
 
@@ -322,7 +389,14 @@ def main():
         r, g = dump(rows, OUT / f"shops-{slug}.json")
         total_raw += r; total_gz += g
         name = rows[0]["district"]
-        district_meta.append({"slug": slug, "name": name, "count": len(rows)})
+        profile = district_profile(rows)
+        district_meta.append({
+            "slug": slug,
+            "name": name,
+            "count": len(rows),
+            "tags": profile["tags"],
+            "stats": profile["stats"],
+        })
         print(f"{'shops-' + slug + '.json':<28}{len(rows):>7}{r/1024:>9.0f} KB{g/1024:>7.0f} KB")
 
     scenics = export_poi(DATA / "scenic" / "poi_all.csv", "scenic")

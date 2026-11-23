@@ -6,6 +6,8 @@
   "description": "长沙美食可信度评估与个性化行程生成系统 · 前端",
   "scripts": {
     "dev": "vite",
+    "build:demo": "node scripts/build-demo.mjs",
+    "prebuild": "node scripts/build-demo.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test src/lib/"

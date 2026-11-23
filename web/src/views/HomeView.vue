@@ -1,13 +1,16 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { getMeta } from '../data/provider'
+import { getMeta, getDemoItinerary } from '../data/provider'
 import EmptyState from '../components/EmptyState.vue'
 
 const meta = ref(null)
+const demo = ref(null)
 const loading = ref(true)
 
 onMounted(async () => {
-  meta.value = await getMeta()
+  const [m, d] = await Promise.all([getMeta(), getDemoItinerary()])
+  meta.value = m
+  demo.value = d
   loading.value = false
 })
 
@@ -19,8 +22,7 @@ const fmt = (n) => (n == null ? '—' : n.toLocaleString('zh-CN'))
     <h1>长沙，不按评分吃</h1>
     <p class="page-lead">
       平台评分高的店，往往只是更贵。我们换一个判断依据：
-      <strong>本地人是不是真的在吃</strong>。然后按你的预算生成行程 ——
-      包括每天 50 元的那种。
+      <strong>本地人是不是真的在吃</strong>。先定每天去哪玩，再在景点周边就近吃。
     </p>
     <div class="hero-actions">
       <RouterLink to="/itinerary" class="btn btn-primary">按预算生成行程</RouterLink>
@@ -39,8 +41,8 @@ const fmt = (n) => (n == null ? '—' : n.toLocaleString('zh-CN'))
         <span>家餐饮</span>
       </div>
       <div class="stat">
-        <b>{{ fmt(meta.counts.scenics) }}</b>
-        <span>个景点</span>
+        <b>{{ fmt(meta.counts.anchors) }}</b>
+        <span>个景点锚点</span>
       </div>
       <div class="stat">
         <b>{{ fmt(meta.counts.hotels) }}</b>
@@ -53,9 +55,46 @@ const fmt = (n) => (n == null ? '—' : n.toLocaleString('zh-CN'))
       「本地认可度」需人工标注，当前为空。
     </p>
 
+    <!-- 行程预览 -->
+    <section v-if="demo" class="demo">
+      <div class="section-title">
+        <h2>行程长这样</h2>
+        <span class="hint">
+          {{ demo.params.days }} 天 · {{ demo.params.dailyBudget }} 元/天 ·
+          {{ demo.params.paceLabel }}
+        </span>
+      </div>
+
+      <div class="demo-card">
+        <div class="demo-meta">
+          <span>共 ¥{{ demo.summary.totalCost }}</span>
+          <span>{{ demo.summary.anchorCount }} 个景点锚点</span>
+          <span>移动 {{ (demo.summary.totalLegMeters / 1000).toFixed(1) }} km</span>
+        </div>
+
+        <div v-for="day in demo.days" :key="day.dayIndex" class="demo-day">
+          <div class="demo-day-head">
+            第 {{ day.dayIndex + 1 }} 天 · {{ day.district }}
+            <span class="demo-day-leg">{{ (day.legMeters / 1000).toFixed(1) }} km</span>
+          </div>
+          <ol class="stops">
+            <li v-for="(s, i) in day.stops" :key="i" :class="s.kind">
+              <span class="stop-label">{{ s.label }}</span>
+              <span class="stop-name">{{ s.name }}</span>
+              <span class="stop-detail">{{ s.detail }}</span>
+            </li>
+          </ol>
+        </div>
+
+        <RouterLink to="/itinerary" class="btn demo-cta">
+          换成你的预算和天数 →
+        </RouterLink>
+      </div>
+    </section>
+
     <div class="section-title">
       <h2>从哪个片区开始</h2>
-      <span class="hint">按距游客核心区分层</span>
+      <span class="hint">标签由数据算出，不是写死的</span>
     </div>
 
     <div class="grid districts">
@@ -67,6 +106,9 @@ const fmt = (n) => (n == null ? '—' : n.toLocaleString('zh-CN'))
       >
         <span class="district-name">{{ d.name }}</span>
         <span class="district-count">{{ fmt(d.count) }} 家</span>
+        <span v-if="d.tags && d.tags.length" class="district-tags">
+          <span v-for="t in d.tags" :key="t.text" class="dtag" :title="t.why">{{ t.text }}</span>
+        </span>
       </RouterLink>
     </div>
   </template>
@@ -154,6 +196,107 @@ const fmt = (n) => (n == null ? '—' : n.toLocaleString('zh-CN'))
   font-size: 12px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+.district-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.dtag {
+  font-size: 10px;
+  line-height: 1.6;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid #fed7aa;
+  white-space: nowrap;
+}
+
+/* ---------------- 行程预览 ---------------- */
+
+.demo-card {
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: #fff;
+  padding: 14px 15px;
+}
+
+.demo-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--ink-2);
+  padding-bottom: 10px;
+  border-bottom: 1px dashed var(--line);
+  font-variant-numeric: tabular-nums;
+}
+
+.demo-day {
+  padding-top: 12px;
+}
+.demo-day-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+  margin-bottom: 6px;
+}
+.demo-day-leg {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.stops {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.stops li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 0 5px 12px;
+  border-left: 2px solid var(--line);
+  margin-left: 3px;
+  font-size: 13px;
+}
+.stops li.anchor {
+  border-left-color: var(--accent);
+}
+.stop-label {
+  flex: 0 0 2.6em;
+  font-size: 11px;
+  color: var(--muted);
+}
+.stop-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.stops li.anchor .stop-name {
+  font-weight: 600;
+}
+.stop-detail {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.demo-cta {
+  margin-top: 12px;
+  width: 100%;
 }
 
 .cmd {

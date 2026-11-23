@@ -115,6 +115,11 @@ export async function listAnchors() {
   return tryOnce('anchors.json', [])
 }
 
+/** 构建时预生成的示例行程，首页用来展示「行程长这样」 */
+export async function getDemoItinerary() {
+  return tryOnce('demo-itinerary.json', null)
+}
+
 export async function listScenics() {
   return tryOnce('scenics.json', [])
 }
