@@ -55,19 +55,21 @@ changsha-food/
 │   ├── make_sample.py      # 清洗 + 分层抽样 → 150 家核验清单
 │   ├── make_route.py       # 生成扫街路线表（Excel，带下拉选项）
 │   ├── make_brief.py       # 生成给导师看的项目说明 DOCX
+│   ├── export_web_data.py  # 导出前端静态 JSON
 │   └── init-repo.ps1       # 一键初始化 git 仓库
 ├── docs/
 │   ├── proposal.md         # 一页纸提案
 │   ├── roadmap.md          # 分阶段制作步骤与验收标准
 │   ├── annotation-spec.md  # 标注规范 v1.0（打分锚点 + 一致性自检）
 │   └── advisor-brief.docx  # 项目说明（申请分配指导教师用）
-└── data/
-    ├── poi_all.csv         # 餐饮 POI 汇总
-    ├── cleaned_all.csv     # 清洗后全量（含派生特征）
-    ├── sample_150.csv      # 150 家核验清单（标注结果写这里）
-    ├── route-plan.xlsx     # 扫街路线表
-    ├── field_report.md     # 字段可得性报告
-    └── sample_report.md    # 抽样结构与对比度说明
+├── data/
+│   ├── poi_all.csv         # 餐饮 POI 汇总
+│   ├── cleaned_all.csv     # 清洗后全量（含派生特征）
+│   ├── sample_150.csv      # 150 家核验清单（标注结果写这里）
+│   ├── route-plan.xlsx     # 扫街路线表
+│   ├── field_report.md     # 字段可得性报告
+│   └── sample_report.md    # 抽样结构与对比度说明
+└── web/                    # Vue 3 + Vite 前端骨架（详见下节）
 ```
 
 ## 快速开始
@@ -92,6 +94,33 @@ python scripts/make_route.py
 采集脚本只用标准库，零额外依赖。
 
 所有脚本的路径都基于脚本自身位置解析，**可以在任何工作目录下运行**。
+
+## 前端（网站骨架）
+
+`web/` 是一个 Vue 3 + Vite 单页应用，数据读 `web/public/data/` 下的静态 JSON，
+**不需要后端、不需要高德 Key、不联网也能跑**。
+
+```bash
+python scripts/export_web_data.py     # 1. 生成/刷新前端数据
+cd web
+pnpm install                          # 2. 装依赖（首次）
+pnpm run dev                          # 3. 打开 http://localhost:5173
+```
+
+构建：`pnpm run build` → `web/dist/`。已设 `base: './'` + hash 路由，
+产物可直接放进 GitHub Pages 子路径，无需服务端配置。
+
+**当前进度**：站点骨架、数据导出、片区列表与店铺详情已完成；
+规则版行程生成（Step 3）尚未实现，`/itinerary` 页面会明确说明，不提供假行程。
+
+两条设计约束：
+
+1. **数据诚实标记**：没标注过的店显示「本地认可度 待采集」，
+   **绝不用平台评分顶替** —— 否则这个站就变成了它自己要反对的东西。
+2. **单一数据入口**：页面只通过 [`web/src/data/provider.js`](web/src/data/provider.js) 取数，
+   将来接 Java 后端 API 时只改这个文件，页面一行不动。
+
+字段契约见 [`web/src/data/schema.md`](web/src/data/schema.md)。
 
 ## 数据来源与合规声明
 
