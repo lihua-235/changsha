@@ -32,7 +32,24 @@ onMounted(async () => {
   loading.value = false
 })
 
-const DAY_OPTIONS = [1, 2, 3, 4, 5]
+/** 天数上限：仅用于防止误输入（比如打了 9999 天），不是产品限制 */
+const MAX_DAYS = 30
+
+function clampDays(v) {
+  const n = Math.floor(Number(v))
+  if (!Number.isFinite(n)) return 1
+  return Math.min(MAX_DAYS, Math.max(1, n))
+}
+
+function setDays(v) {
+  days.value = clampDays(v)
+}
+
+function onDaysInput(e) {
+  days.value = clampDays(e.target.value)
+  // 把输入框内容同步回夹紧后的值，避免显示 9999 而实际算的是 30
+  e.target.value = days.value
+}
 
 function toggleDistrict(slug) {
   const set = new Set(selectedSlugs.value)
@@ -90,15 +107,36 @@ function generate() {
         <span class="ctrl-label">天数</span>
         <div class="days">
           <button
-            v-for="d in DAY_OPTIONS"
-            :key="d"
             type="button"
-            class="day-btn"
-            :class="{ active: days === d }"
-            @click="days = d"
+            class="step"
+            :disabled="days <= 1"
+            aria-label="减少一天"
+            @click="setDays(days - 1)"
           >
-            {{ d }} 天
+            −
           </button>
+          <input
+            class="day-input"
+            type="number"
+            inputmode="numeric"
+            min="1"
+            :max="MAX_DAYS"
+            :value="days"
+            aria-label="旅游天数"
+            @change="onDaysInput"
+            @blur="onDaysInput"
+          />
+          <span class="day-unit">天</span>
+          <button
+            type="button"
+            class="step"
+            :disabled="days >= MAX_DAYS"
+            aria-label="增加一天"
+            @click="setDays(days + 1)"
+          >
+            ＋
+          </button>
+          <span class="day-hint">1–30 天，可以直接输入</span>
         </div>
       </div>
 
@@ -204,25 +242,74 @@ function generate() {
 
 .days {
   display: flex;
+  align-items: center;
   gap: 6px;
   flex-wrap: wrap;
 }
-.day-btn {
-  padding: 6px 13px;
+
+.step {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--r-sm);
   background: #fff;
-  font-size: 13px;
+  font-size: 16px;
+  line-height: 1;
   font-family: inherit;
   color: var(--ink-2);
   cursor: pointer;
-  font-variant-numeric: tabular-nums;
+  user-select: none;
 }
-.day-btn.active {
+.step:hover:not(:disabled) {
   border-color: var(--accent);
-  background: var(--accent);
-  color: #fff;
+  color: var(--accent);
+}
+.step:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.day-input {
+  width: 56px;
+  height: 32px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: #fff;
+  font-size: 15px;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
   font-weight: 600;
+  text-align: center;
+  color: var(--ink);
+  /* 去掉数字输入框的上下箭头，避免和 − / ＋ 重复 */
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+.day-input::-webkit-outer-spin-button,
+.day-input::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+.day-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.day-unit {
+  font-size: 13px;
+  color: var(--ink-2);
+  margin-right: 2px;
+}
+
+.day-hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 2px;
 }
 
 .districts {
