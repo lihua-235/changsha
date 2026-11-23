@@ -16,11 +16,13 @@ import { fileURLToPath } from 'node:url'
 import {
   BUDGET_TIERS,
   MEAL_SLOTS,
+  PACES,
   buildItinerary,
   compareTiers,
   dishGroup,
   dishTag,
   distanceMeters,
+  mealBudgets,
   openInSlot,
   parseOpeningHours,
 } from './itinerary.js'
@@ -119,6 +121,25 @@ describe('dishTag / dishGroup', () => {
     assert.equal(dishGroup({ keytag: '奶茶/茶饮' }), '饮品')
     assert.equal(dishGroup({ keytag: '咖啡' }), '饮品')
     assert.equal(dishGroup({ keytag: '火锅' }), '火锅烧烤')
+  })
+
+  test('蛋糕/烘焙与正餐西式分开，避免「蛋糕店当午餐」', () => {
+    assert.equal(dishGroup({ keytag: '蛋糕' }), '甜品烘焙')
+    assert.equal(dishGroup({ keytag: '西式糕点' }), '甜品烘焙')
+    assert.equal(dishGroup({ keytag: '西餐' }), '正餐西式')
+    assert.equal(dishGroup({ keytag: '披萨' }), '正餐西式')
+  })
+
+  test('午晚餐不安排甜品烘焙', () => {
+    for (const slug of DISTRICTS) {
+      for (const tier of BUDGET_TIERS) {
+        const r = buildItinerary({ days: 1, dailyBudget: tier.value, districtSlugs: [slug] }, SHOPS)
+        for (const slot of ['lunch', 'dinner']) {
+          const m = r.plan[0].meals.find((x) => x.slot === slot && x.shop)
+          if (m) assert.notEqual(m.dishGroup, '甜品烘焙', `${slug}/${tier.value} ${slot} 是甜品`)
+        }
+      }
+    }
   })
 })
 
@@ -226,8 +247,16 @@ describe('compareTiers：三档必须产生实质差异', () => {
     assert.equal(new Set(counts).size, 1, `餐次数不一致: ${counts}`)
   })
 
-  test('便宜档的人均不超过其单餐预算', () => {
-    assert.ok(cheap.summary.avgPerMeal <= cheap.summary.perMealBudget + 0.01)
+  test('严格命中的餐次不超过各自时段预算（早餐不再是三分之一）', () => {
+    const budgets = mealBudgets(50)
+    const r = buildItinerary({ days: 1, dailyBudget: 50, districtSlugs: ['wuyi'] }, SHOPS)
+    for (const m of r.plan[0].meals) {
+      if (m.relaxed || !m.shop) continue
+      assert.ok(
+        m.cost <= budgets[m.slot] + 0.01,
+        `${m.slotLabel} ¥${m.cost} 超过该时段预算 ¥${budgets[m.slot]}`
+      )
+    }
   })
 })
 
@@ -297,13 +326,12 @@ describe('锚点模式：先去哪玩，再就近吃', () => {
     assert.ok(costs[0] < costs[1] && costs[1] < costs[2], `花费未递增: ${costs.join(' / ')}`)
   })
 
-  test('锚点用完后给出提示，而不是静默乱排', () => {
-    // 可用锚点 23 个，每天最多 3 个 → 12 天必然用尽
-    const r = buildItinerary({ days: 12, dailyBudget: 150, anchors: ANCHORS }, SHOPS)
+  test('锚点不够时给出提示，而不是静默乱排', () => {
+    const r = buildItinerary({ days: 15, dailyBudget: 150, anchors: ANCHORS }, SHOPS)
     const used = r.plan.flatMap((p) => p.anchors).length
     assert.ok(used <= usable.length, '锚点使用数超过可用数')
-    const hasHint = r.plan.some((p) => p.notes.some((n) => n.includes('锚点已用完')))
-    assert.ok(hasHint, '锚点用尽时应给出提示')
+    const hasHint = r.plan.some((p) => p.notes.some((n) => n.includes('锚点不够了')))
+    assert.ok(hasHint, '锚点不足时应给出提示')
   })
 
   test('summary 区分景点数与吃逛数', () => {
@@ -311,5 +339,88 @@ describe('锚点模式：先去哪玩，再就近吃', () => {
     const s = r.summary
     assert.equal(s.anchorCount, s.attractionCount + s.diningAnchorCount)
     assert.ok(s.anchorCount > 0)
+  })
+})
+
+describe('预算分配：早餐封顶，钱留给午晚餐', () => {
+  test('早餐预算不超过 25 元，也不超过每日的 20%', () => {
+    for (const budget of [50, 150, 400]) {
+      const b = mealBudgets(budget)
+      assert.ok(b.breakfast <= 25 + 1e-6, `${budget} 档早餐预算 ${b.breakfast} 超过 25`)
+      assert.ok(b.breakfast <= budget * 0.2 + 1e-6, `${budget} 档早餐超占比`)
+    }
+  })
+
+  test('三餐预算加起来等于每日预算', () => {
+    for (const budget of [50, 150, 400]) {
+      const b = mealBudgets(budget)
+      assert.ok(Math.abs(b.breakfast + b.lunch + b.dinner - budget) < 1e-6)
+    }
+  })
+
+  test('午晚餐预算明显高于早餐', () => {
+    for (const budget of [50, 150, 400]) {
+      const b = mealBudgets(budget)
+      assert.ok(b.lunch > b.breakfast && b.dinner > b.breakfast, `${budget} 档午晚餐没有更高`)
+    }
+  })
+
+  test('实际早餐花费不超过早餐预算', () => {
+    for (const budget of [50, 150, 400]) {
+      const r = buildItinerary({ days: 1, dailyBudget: budget, anchors: ANCHORS }, SHOPS)
+      const b = mealBudgets(budget)
+      const bf = r.plan[0].meals.find((m) => m.slot === 'breakfast' && m.shop)
+      if (bf) assert.ok(bf.cost <= b.breakfast + 0.01, `${budget} 档早餐实际 ¥${bf.cost} 超预算 ¥${b.breakfast}`)
+    }
+  })
+})
+
+describe('节奏档位（学穷游的三选一）', () => {
+  test('三个档位都给出每天游览时长说明', () => {
+    assert.equal(PACES.length, 3)
+    for (const p of PACES) assert.ok(p.desc.includes('小时'))
+  })
+
+  test('宽松档每天只排 1 个锚点', () => {
+    const r = buildItinerary(
+      { days: 2, dailyBudget: 150, anchors: ANCHORS, pace: 'relaxed' },
+      SHOPS
+    )
+    for (const day of r.plan) {
+      assert.ok(day.anchors.length <= 1, `宽松档排了 ${day.anchors.length} 个锚点`)
+    }
+  })
+
+  test('紧凑档可以排到 3 个锚点，且总时长不超上限', () => {
+    const r = buildItinerary(
+      { days: 2, dailyBudget: 150, anchors: ANCHORS, pace: 'tight' },
+      SHOPS
+    )
+    const tight = PACES.find((p) => p.key === 'tight')
+    for (const day of r.plan) {
+      assert.ok(day.anchors.length <= 3)
+      const mins = day.anchors.reduce((s, a) => s + (a.anchor.durationMin ?? 0), 0)
+      assert.ok(mins <= tight.maxAnchorMinutes, `当天游览 ${mins} 分钟超过上限`)
+    }
+    assert.equal(r.summary.pace, 'tight')
+  })
+
+  test('紧凑档的锚点数不少于宽松档', () => {
+    const relaxed = buildItinerary({ days: 2, dailyBudget: 150, anchors: ANCHORS, pace: 'relaxed' }, SHOPS)
+    const tight = buildItinerary({ days: 2, dailyBudget: 150, anchors: ANCHORS, pace: 'tight' }, SHOPS)
+    assert.ok(tight.summary.anchorCount >= relaxed.summary.anchorCount)
+  })
+})
+
+describe('单日移动上限 12 km', () => {
+  test('两种模式下每天都不超过 12 km', () => {
+    const anchorRun = buildItinerary({ days: 3, dailyBudget: 400, anchors: ANCHORS, pace: 'tight' }, SHOPS)
+    for (const day of anchorRun.plan) {
+      assert.ok(day.legMeters <= 12000, `锚点模式第 ${day.dayIndex + 1} 天 ${day.legMeters}m 超 12km`)
+    }
+    const districtRun = buildItinerary({ days: 3, dailyBudget: 150, districtSlugs: DISTRICTS }, SHOPS)
+    for (const day of districtRun.plan) {
+      assert.ok(day.legMeters <= 12000, `片区模式第 ${day.dayIndex + 1} 天 ${day.legMeters}m 超 12km`)
+    }
   })
 })
