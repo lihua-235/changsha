@@ -17,6 +17,7 @@ const budget = ref(150)
 const selectedSlugs = ref([])
 const anchors = ref([])
 const pace = ref(DEFAULT_PACE)
+const seed = ref(0)
 const hasGenerated = ref(false)
 
 onMounted(async () => {
@@ -85,6 +86,7 @@ const built = computed(() => {
         districtSlugs: selectedSlugs.value,
         anchors: anchorMode.value ? anchors.value : undefined,
         pace: pace.value,
+        seed: seed.value,
       },
       poolShops.value
     ),
@@ -95,8 +97,20 @@ const current = computed(
   () => built.value.find((b) => b.tier.value === budget.value) ?? built.value[0] ?? null
 )
 
+/**
+ * 首次是「生成行程」，之后是「换一批」。
+ * 算法本身是确定性的，同样的参数只会得到同一份行程 ——
+ * 所以按钮必须诚实地表示「会变」，而变的来源是 seed。
+ */
+const actionLabel = computed(() => (hasGenerated.value ? '换一批' : '生成行程'))
+
 function generate() {
-  hasGenerated.value = true
+  if (hasGenerated.value) {
+    // 换一批：推进种子，景点与餐厅都会重新抽样
+    seed.value += 1
+  } else {
+    hasGenerated.value = true
+  }
 }
 </script>
 
@@ -193,7 +207,7 @@ function generate() {
 
       <div class="ctrl-row actions">
         <button type="button" class="btn btn-primary" @click="generate">
-          {{ hasGenerated ? '重新生成' : '生成行程' }}
+          {{ actionLabel }}
         </button>
         <span class="pool-hint">
           <template v-if="anchorMode">
@@ -206,6 +220,11 @@ function generate() {
           </template>
         </span>
       </div>
+
+      <p v-if="hasGenerated" class="seed-note">
+        同样的参数会得到同一份行程（可复现）。点「换一批」会重新抽样，
+        <strong>景点和餐厅都会变</strong> —— 当前第 {{ seed + 1 }} 版。
+      </p>
     </section>
 
     <template v-if="current">
@@ -429,6 +448,13 @@ function generate() {
   font-size: 12px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+
+.seed-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
 }
 
 .insight {

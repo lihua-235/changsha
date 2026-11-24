@@ -25,6 +25,7 @@ import {
   mealBudgets,
   openInSlot,
   parseOpeningHours,
+  pickFromTopK,
 } from './itinerary.js'
 
 /* ---------------- 真实数据 ---------------- */
@@ -422,5 +423,75 @@ describe('单日移动上限 12 km', () => {
     for (const day of districtRun.plan) {
       assert.ok(day.legMeters <= 12000, `片区模式第 ${day.dayIndex + 1} 天 ${day.legMeters}m 超 12km`)
     }
+  })
+})
+
+/* ---------------- 换一批：种子 + top-K 抽样 ---------------- */
+
+describe('换一批：同参数下想要不同安排', () => {
+  const params = { days: 2, dailyBudget: 150, anchors: ANCHORS }
+
+  test('pickFromTopK 在 seed=0 时取第一名（保持旧行为）', () => {
+    assert.equal(pickFromTopK(['a', 'b', 'c'], 3, 0, 'm'), 'a')
+  })
+
+  test('pickFromTopK 只在给定的 K 个候选里选', () => {
+    for (let seed = 1; seed <= 30; seed += 1) {
+      const got = pickFromTopK(['a', 'b', 'c', 'd', 'e', 'f', 'g'], 3, seed, 'm')
+      assert.ok(['a', 'b', 'c'].includes(got), `seed=${seed} 选到了 ${got}，超出前 3 名`)
+    }
+  })
+
+  test('同一个 seed 结果完全一致（可复现）', () => {
+    const a = buildItinerary({ ...params, seed: 7 }, SHOPS)
+    const b = buildItinerary({ ...params, seed: 7 }, SHOPS)
+    assert.deepEqual(a, b)
+  })
+
+  test('seed=0 与不传 seed 等价', () => {
+    const a = buildItinerary(params, SHOPS)
+    const b = buildItinerary({ ...params, seed: 0 }, SHOPS)
+    assert.deepEqual(a, b)
+  })
+
+  test('不同 seed 会产生不同的行程', () => {
+    const seen = new Set()
+    for (let seed = 1; seed <= 10; seed += 1) {
+      const r = buildItinerary({ ...params, seed }, SHOPS)
+      const fingerprint = r.plan
+        .map((d) => [
+          ...d.anchors.map((a) => a.anchor.id),
+          ...d.meals.map((m) => m.shop?.id ?? m.anchor?.id ?? '-'),
+        ].join(','))
+        .join('|')
+      seen.add(fingerprint)
+    }
+    assert.ok(seen.size >= 4, `10 个种子只产生了 ${seen.size} 种行程，变化不足`)
+  })
+
+  test('换种子后硬约束仍然成立', () => {
+    const budgets = mealBudgets(50)
+    for (const seed of [1, 5, 13, 21]) {
+      const r = buildItinerary(
+        { days: 2, dailyBudget: 50, anchors: ANCHORS, pace: 'tight', seed },
+        SHOPS
+      )
+      for (const day of r.plan) {
+        assert.ok(day.legMeters <= 12000, `seed=${seed} 第 ${day.dayIndex + 1} 天超 12km`)
+        const mins = day.anchors.reduce((s, a) => s + (a.anchor.durationMin ?? 0), 0)
+        assert.ok(mins <= 960, `seed=${seed} 游览 ${mins} 分钟超上限`)
+      }
+      for (const m of r.plan.flatMap((d) => d.meals)) {
+        if (!m.shop || m.relaxed) continue
+        assert.ok(m.cost <= budgets[m.slot] + 0.01, `seed=${seed} ${m.slotLabel} 超预算`)
+      }
+    }
+  })
+
+  test('片区模式同样支持种子', () => {
+    const a = buildItinerary({ days: 2, dailyBudget: 150, districtSlugs: DISTRICTS, seed: 3 }, SHOPS)
+    const b = buildItinerary({ days: 2, dailyBudget: 150, districtSlugs: DISTRICTS, seed: 9 }, SHOPS)
+    const fp = (r) => r.plan.flatMap((d) => d.meals.map((m) => m.shop?.id ?? '-')).join('|')
+    assert.notEqual(fp(a), fp(b))
   })
 })

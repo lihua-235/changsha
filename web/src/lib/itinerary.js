@@ -182,9 +182,44 @@ export function distanceMeters(a, b) {
   return Math.hypot(((a.lng ?? 0) - (b.lng ?? 0)) * lngDeg, ((a.lat ?? 0) - (b.lat ?? 0)) * latDeg)
 }
 
+/* ---------------- 换一批：种子 + top-K 抽样 ----------------
+ *
+ * 为什么需要它：算法原本完全确定，同样的参数永远排出同一份行程，
+ * 但界面上写着「重新生成」，用户会以为会变 —— 这是 UI 在撒谎。
+ *
+ * 做法：先按原有标准排好序（质量下限有保证），再在**前 K 名**里
+ * 按 seed 选一个。这样：
+ *   · 给定 (参数, seed) 结果依然唯一 —— 论文的「可复现」不受影响
+ *   · 换个 seed 得到不同但同样合格的安排
+ *   · 永远不会为了"不同"而排出烂店
+ *
+ * seed = 0 时直接取第一名，保持原有行为（旧测试与示例行程不受影响）。
+ */
+
+/** FNV-1a，纯为打散用，不需要密码学强度 */
+function hash32(str) {
+  let h = 2166136261
+  for (let i = 0; i < str.length; i += 1) {
+    h ^= str.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return h >>> 0
+}
+
+/** 在前 K 名里按种子挑一个 */
+export function pickFromTopK(sorted, k, seed, magic) {
+  if (!sorted.length) return null
+  if (!seed) return sorted[0]
+  const n = Math.min(k, sorted.length)
+  return sorted[hash32(`${seed}|${magic}`) % n]
+}
+
+/** 抽样池的大小：越大越随机，越小越稳。5 是个折中 */
+const TOP_K = 5
+
 /* ---------------- 核心：生成一天 ---------------- */
 
-function buildDay(pool, budgets, usedIds) {
+function buildDay(pool, budgets, usedIds, seed) {
   const meals = []
   const notes = []
   const usedGroups = new Set()
@@ -249,7 +284,7 @@ function buildDay(pool, budgets, usedIds) {
         return String(a.id).localeCompare(String(b.id))
       })
 
-      picked = sorted[0]
+      picked = pickFromTopK(sorted, TOP_K, seed, `district|${slot.key}|${attempt.level}`)
       level = attempt.level
       break
     }
@@ -303,11 +338,12 @@ function buildDay(pool, budgets, usedIds) {
 /* ---------------- 对外：生成整份行程 ---------------- */
 
 /** 片区模式：按片区轮转选三餐（没有锚点时用这个） */
-function buildDistrictItinerary({ days, dailyBudget, districtSlugs }, shops) {
+function buildDistrictItinerary({ days, dailyBudget, districtSlugs, seed = 0 }, shops) {
   const nDays = Math.max(1, Math.floor(days || 1))
   const budget = Number(dailyBudget) || 50
   const budgets = mealBudgets(budget)
   const perMeal = budget / 3
+  const seedNum = Math.max(0, Math.floor(Number(seed) || 0))
 
   const slugs = districtSlugs?.length
     ? districtSlugs
@@ -325,7 +361,7 @@ function buildDistrictItinerary({ days, dailyBudget, districtSlugs }, shops) {
       plan.push({ dayIndex: d, slug, district: slug, meals: [], notes: [], legMeters: 0 })
       continue
     }
-    const day = buildDay(pool, budgets, usedIds)
+    const day = buildDay(pool, budgets, usedIds, seedNum)
     if (day.legMeters > MAX_DAY_LEG_M) {
       day.notes.push(
         `当天移动 ${(day.legMeters / 1000).toFixed(1)} km，超过 ${MAX_DAY_LEG_M / 1000} km 上限，建议打车或换近一点的店`
@@ -356,6 +392,7 @@ function buildDistrictItinerary({ days, dailyBudget, districtSlugs }, shops) {
       dinner: Math.round(budgets.dinner),
     },
     priceFloor: Math.round(perMeal * PRICE_FLOOR_RATIO),
+    seed: seedNum,
     mealCount: allMeals.length,
     totalCost: Math.round(totalCost),
     avgPerMeal: allMeals.length ? Math.round((totalCost / allMeals.length) * 10) / 10 : 0,
@@ -380,9 +417,9 @@ function buildDistrictItinerary({ days, dailyBudget, districtSlugs }, shops) {
 }
 
 /** 同一批参数跑三档预算，用于并排对比 */
-export function compareTiers({ days, districtSlugs, anchors }, shops, tiers = BUDGET_TIERS.map((t) => t.value)) {
+export function compareTiers(params, shops, tiers = BUDGET_TIERS.map((t) => t.value)) {
   return tiers.map((dailyBudget) => {
-    const r = buildItinerary({ days, dailyBudget, districtSlugs, anchors }, shops)
+    const r = buildItinerary({ ...params, dailyBudget }, shops)
     return {
       tier:
         BUDGET_TIERS.find((t) => t.value === dailyBudget) ?? {
@@ -422,21 +459,22 @@ function usableAnchors(anchors) {
   return (anchors ?? []).filter((a) => a.foodAvailable && a.lng != null && a.lat != null)
 }
 
-function pickAnchor(candidates, used, filter) {
+function pickAnchor(candidates, used, filter, seed, magic = 'anchor') {
   const pool = candidates.filter((a) => !used.has(a.id)).filter(filter)
   if (!pool.length) return null
-  return [...pool].sort((a, b) => {
+  const sorted = [...pool].sort((a, b) => {
     if (a.mustSee !== b.mustSee) return a.mustSee ? -1 : 1
     // 离市中心近的先排，减少跨城
     const da = Math.abs((a.lng ?? 0) - 112.982) + Math.abs((a.lat ?? 0) - 28.1945)
     const db = Math.abs((b.lng ?? 0) - 112.982) + Math.abs((b.lat ?? 0) - 28.1945)
     if (da !== db) return da - db
     return String(a.id).localeCompare(String(b.id))
-  })[0]
+  })
+  return pickFromTopK(sorted, TOP_K, seed, magic)
 }
 
 /** 在锚点周边找一家店：半径逐级放宽，价格档由宽到窄 */
-function pickMealNear(pool, center, perMeal, slot, usedIds, usedGroups) {
+function pickMealNear(pool, center, perMeal, slot, usedIds, usedGroups, seed) {
   const floor = perMeal * PRICE_FLOOR_RATIO
   const attempts = [
     {
@@ -461,10 +499,15 @@ function pickMealNear(pool, center, perMeal, slot, usedIds, usedGroups) {
         return !(slot.exclude || []).includes(g)
       })
       // 时段偏好（如早餐偏粉面）先筛一遍，筛空了再退回
+      let preferMissed = false
       if (slot.prefer) {
         const pref = byGroup.filter((s) => slot.prefer.includes(dishGroup(s)))
         if (!pref.length && !byGroup.length) continue
-        if (pref.length) byGroup.splice(0, byGroup.length, ...pref)
+        if (pref.length) {
+          byGroup.splice(0, byGroup.length, ...pref)
+        } else {
+          preferMissed = true
+        }
       }
       const byHours = byGroup.filter((s) => {
         const r = openInSlot(parseOpeningHours(s.opentimeWeek), slot)
@@ -484,13 +527,18 @@ function pickMealNear(pool, center, perMeal, slot, usedIds, usedGroups) {
         if (da !== db) return da - db
         return String(a.id).localeCompare(String(b.id))
       })
-      return { shop: sorted[0], level: attempt.level, radius }
+      return {
+        shop: pickFromTopK(sorted, TOP_K, seed, `meal|${slot.key}|${radius}|${attempt.level}`),
+        level: attempt.level,
+        radius,
+        preferMissed,
+      }
     }
   }
   return null
 }
 
-function buildAnchorDay(dayIndex, anchors, shops, budgets, usedAnchorIds, usedShopIds, pace) {
+function buildAnchorDay(dayIndex, anchors, shops, budgets, usedAnchorIds, usedShopIds, pace, seed) {
   const notes = []
   const usedGroups = new Set()
   const candidates = usableAnchors(anchors)
@@ -502,10 +550,17 @@ function buildAnchorDay(dayIndex, anchors, shops, budgets, usedAnchorIds, usedSh
 
   function tryPick(part, filter) {
     if (picks.length >= P.maxAnchors) return
-    const a = pickAnchor(candidates, taken, filter)
-    if (!a) return
     const usedMin = picks.reduce((sum, p) => sum + (p.anchor.durationMin ?? 90), 0)
-    if (usedMin + (a.durationMin ?? 90) > P.maxAnchorMinutes) return
+    // 把游览时长上限放进筛选条件：否则可能选中一个太长的锚点，
+    // 发现超时后被丢弃，白白浪费一个名额
+    const a = pickAnchor(
+      candidates,
+      taken,
+      (x) => filter(x) && usedMin + (x.durationMin ?? 90) <= P.maxAnchorMinutes,
+      seed,
+      part
+    )
+    if (!a) return
     picks.push({ part, anchor: a })
     taken.add(a.id)
   }
@@ -555,7 +610,7 @@ function buildAnchorDay(dayIndex, anchors, shops, budgets, usedAnchorIds, usedSh
       continue
     }
 
-    const picked = pickMealNear(shops, center, perMeal, slot, usedShopIds, usedGroups)
+    const picked = pickMealNear(shops, center, perMeal, slot, usedShopIds, usedGroups, seed)
     if (!picked) {
       notes.push(`${slot.label}：锚点周边 3 km 内没有可选餐厅`)
       continue
@@ -566,6 +621,9 @@ function buildAnchorDay(dayIndex, anchors, shops, budgets, usedAnchorIds, usedSh
     }
     if (picked.radius > 800) {
       notes.push(`${slot.label}：锚点 800 m 内不够选，已放宽到 ${picked.radius} m 内`)
+    }
+    if (picked.preferMissed) {
+      notes.push(`${slot.label}：周边没有${slot.prefer.join('/')}类的店，品类已放宽`)
     }
 
     const parsed = parseOpeningHours(picked.shop.opentimeWeek)
@@ -622,12 +680,13 @@ function buildAnchorDay(dayIndex, anchors, shops, budgets, usedAnchorIds, usedSh
 }
 
 /** 锚点模式：先定每天的锚点，再就近安排三餐 */
-function buildAnchorItinerary({ days, dailyBudget, anchors, pace = DEFAULT_PACE }, shops) {
+function buildAnchorItinerary({ days, dailyBudget, anchors, pace = DEFAULT_PACE, seed = 0 }, shops) {
   const nDays = Math.max(1, Math.floor(days || 1))
   const budget = Number(dailyBudget) || 50
   const perMeal = budget / 3
   const budgets = mealBudgets(budget)
   const paceKey = PACES.some((p) => p.key === pace) ? pace : DEFAULT_PACE
+  const seedNum = Math.max(0, Math.floor(Number(seed) || 0))
 
   const usedAnchorIds = new Set()
   const usedShopIds = new Set()
@@ -635,7 +694,9 @@ function buildAnchorItinerary({ days, dailyBudget, anchors, pace = DEFAULT_PACE 
   const notes = []
 
   for (let d = 0; d < nDays; d += 1) {
-    const day = buildAnchorDay(d, anchors, shops, budgets, usedAnchorIds, usedShopIds, paceKey)
+    const day = buildAnchorDay(
+      d, anchors, shops, budgets, usedAnchorIds, usedShopIds, paceKey, seedNum
+    )
     plan.push({
       dayIndex: d,
       district: day.anchors[0]?.anchor.district ?? '',
@@ -681,6 +742,7 @@ function buildAnchorItinerary({ days, dailyBudget, anchors, pace = DEFAULT_PACE 
     attractionCount: allAnchors.filter((a) => a.kind !== 'dining').length,
     pace: paceKey,
     paceLabel: PACES.find((p) => p.key === paceKey)?.label ?? '',
+    seed: seedNum,
     anchorMinutes: allAnchors.reduce((sum, a) => sum + (a.durationMin ?? 0), 0),
   }
 
