@@ -1,8 +1,10 @@
 # 把 web/ 构建产物自动发布到 GitHub Pages
 #
 # 触发：推送到 main，或在 Actions 页手动运行
-# 前提：仓库 Settings → Pages → Source 需选择「GitHub Actions」
-#       （下面的 configure-pages 带 enablement: true，通常会自动开）
+#
+# 前提（只需做一次，且必须在 GitHub 网页上手动完成）：
+#   Settings → Pages → Build and deployment → Source 选择「GitHub Actions」
+#   没启用 Pages 时，configure-pages 会直接失败（令牌无权限创建 Pages 站点）。
 
 name: Deploy web to Pages
 
@@ -47,8 +49,6 @@ jobs:
         run: npm run build
 
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
