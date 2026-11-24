@@ -1,7 +1,9 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { listDistricts, listShops, listAnchors } from '../data/provider.js'
 import { BUDGET_TIERS, DEFAULT_PACE, PACES, buildItinerary } from '../lib/itinerary.js'
+import { PARAM_DEFAULTS, STORAGE_KEY, parseParams, toQuery } from '../lib/itinerary-params.js'
 import BudgetPicker from '../components/BudgetPicker.vue'
 import DayTimeline from '../components/DayTimeline.vue'
 import TierCompare from '../components/TierCompare.vue'
@@ -19,8 +21,104 @@ const anchors = ref([])
 const pace = ref(DEFAULT_PACE)
 const seed = ref(0)
 const hasGenerated = ref(false)
+const copied = ref(false)
 
-onMounted(async () => {
+const route = useRoute()
+const router = useRouter()
+
+/* ---------------- 状态持久化 ----------------
+ * 行程原本只活在组件内存里，切到首页再回来就没了。
+ * 因为算法确定，所以「参数就是存档」：
+ *   URL query      → 刷新不丢、可分享
+ *   localStorage   → 站内跳走再回来不丢
+ */
+
+function currentParams() {
+  return { days: days.value, budget: budget.value, pace: pace.value, seed: seed.value }
+}
+
+function applyParams(p) {
+  days.value = p.days
+  budget.value = p.budget
+  pace.value = p.pace
+  seed.value = p.seed
+  hasGenerated.value = true
+  // 从分享链接进来时也要落一份到本地，
+  // 否则回首页再点「行程」又会变空
+  try {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(toQuery({ days: p.days, budget: p.budget, pace: p.pace, seed: p.seed }))
+    )
+  } catch {
+    /* 忽略 */
+  }
+}
+
+function readStored() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+/** 优先用 URL（分享进来的链接），其次用本地记录（自己刚看过的那份） */
+function restore() {
+  const fromUrl = parseParams(route.query)
+  if (fromUrl.restored) {
+    applyParams(fromUrl)
+    return
+  }
+  const fromStore = parseParams(readStored() ?? {})
+  if (fromStore.restored) {
+    applyParams(fromStore)
+    syncUrl()
+  }
+}
+
+function syncUrl() {
+  const q = toQuery(currentParams())
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(q))
+  } catch {
+    /* 隐私模式下 localStorage 可能不可用，忽略即可 */
+  }
+  router.replace({ path: '/itinerary', query: q })
+}
+
+watch([days, budget, pace, seed], () => {
+  if (hasGenerated.value) syncUrl()
+})
+
+function reset() {
+  days.value = PARAM_DEFAULTS.days
+  budget.value = PARAM_DEFAULTS.budget
+  pace.value = PARAM_DEFAULTS.pace
+  seed.value = 0
+  hasGenerated.value = false
+  try {
+    localStorage.removeItem(STORAGE_KEY)
+  } catch {
+    /* 忽略 */
+  }
+  router.replace({ path: '/itinerary' })
+}
+
+async function copyLink() {
+  const q = new URLSearchParams(toQuery(currentParams())).toString()
+  const url = `${window.location.origin}${window.location.pathname}#/itinerary?${q}`
+  try {
+    await navigator.clipboard.writeText(url)
+    copied.value = true
+    setTimeout(() => {
+      copied.value = false
+    }, 1800)
+  } catch {
+    copied.value = false
+  }
+}onMounted(async () => {
   districts.value = await listDistricts()
   if (!districts.value.length) {
     loading.value = false
@@ -33,6 +131,7 @@ onMounted(async () => {
   )
   allShops.value = lists.flat()
   anchors.value = await listAnchors()
+  restore()
   loading.value = false
 })
 
@@ -209,6 +308,9 @@ function generate() {
         <button type="button" class="btn btn-primary" @click="generate">
           {{ actionLabel }}
         </button>
+        <button v-if="hasGenerated" type="button" class="btn" @click="copyLink">
+          {{ copied ? '已复制 ✓' : '复制行程链接' }}
+        </button>
         <span class="pool-hint">
           <template v-if="anchorMode">
             {{ anchors.filter((a) => a.foodAvailable).length }} 个可排程锚点 ·
@@ -222,8 +324,10 @@ function generate() {
       </div>
 
       <p v-if="hasGenerated" class="seed-note">
-        同样的参数会得到同一份行程（可复现）。点「换一批」会重新抽样，
-        <strong>景点和餐厅都会变</strong> —— 当前第 {{ seed + 1 }} 版。
+        同样的参数会得到同一份行程（可复现），所以
+        <strong>这份行程的链接可以存下来，也可以发给同行的人</strong>。
+        点「换一批」会重新抽样，景点和餐厅都会变 —— 当前第 {{ seed + 1 }} 版。
+        <button type="button" class="link-btn" @click="reset">重新开始</button>
       </p>
     </section>
 
@@ -455,6 +559,17 @@ function generate() {
   font-size: 11px;
   line-height: 1.6;
   color: var(--muted);
+}
+
+.link-btn {
+  border: none;
+  background: none;
+  padding: 0 0 0 4px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .insight {

@@ -1,6 +1,7 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { getMeta, getDemoItinerary } from '../data/provider'
+import { toQuery } from '../lib/itinerary-params.js'
 import EmptyState from '../components/EmptyState.vue'
 
 const meta = ref(null)
@@ -15,6 +16,16 @@ onMounted(async () => {
 })
 
 const fmt = (n) => (n == null ? '—' : n.toLocaleString('zh-CN'))
+
+/** 点进示例行程时带上参数，进去就是这一份（可复现） */
+const demoLink = computed(() => {
+  if (!demo.value) return { path: '/itinerary' }
+  const p = demo.value.params
+  return {
+    path: '/itinerary',
+    query: toQuery({ days: p.days, budget: p.dailyBudget, pace: p.pace, seed: 0 }),
+  }
+})
 </script>
 
 <template>
@@ -86,7 +97,7 @@ const fmt = (n) => (n == null ? '—' : n.toLocaleString('zh-CN'))
           </ol>
         </div>
 
-        <RouterLink to="/itinerary" class="btn demo-cta">
+        <RouterLink :to="demoLink" class="btn demo-cta">
           换成你的预算和天数 →
         </RouterLink>
       </div>
